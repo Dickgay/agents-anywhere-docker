@@ -1,0 +1,97 @@
+name: agents-anywhere
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-database-url: &database-url postgresql+asyncpg://agents_anywhere:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD to a random hex string in .env}@postgres-next:5432/agents_anywhere
+
+services:
+  postgres-next:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_DB: agents_anywhere
+      POSTGRES_USER: agents_anywhere
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - agents-anywhere-pg-next:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agents_anywhere -d agents_anywhere"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks: [backend]
+
+  redis-next:
+    image: redis:8-alpine
+    restart: unless-stopped
+    logging: *logging
+    command: [redis-server, --save, "", --appendonly, "yes", --appendfsync, everysec, --maxmemory, "256mb", --maxmemory-policy, noeviction]
+    volumes:
+      - agents-anywhere-redis-next:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  migrate-next:
+    image: ${AGENTS_ANYWHERE_IMAGE:-yxyu258/agents-anywhere:2.1.0}
+    restart: "no"
+    logging: *logging
+    depends_on:
+      postgres-next:
+        condition: service_healthy
+    environment:
+      AGENT_SERVER_DB_URL: *database-url
+      AGENT_SERVER_MIGRATION_LOCK_TIMEOUT: "120"
+    command: [/opt/venv/bin/python, -m, agent_server.infra.db.migrations, upgrade]
+    networks: [backend]
+
+  server-next:
+    image: ${AGENTS_ANYWHERE_IMAGE:-yxyu258/agents-anywhere:2.1.0}
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      migrate-next:
+        condition: service_completed_successfully
+      redis-next:
+        condition: service_healthy
+    environment:
+      AGENT_SERVER_DB_URL: *database-url
+      AGENT_SERVER_REDIS_URL: redis://redis-next:6379/0
+      AGENT_SERVER_FILES_BACKEND: local
+      AGENT_SERVER_FILES_LOCAL_ROOT: /data/agent-server.files
+      AGENT_SERVER_SECRET: ${AGENT_SERVER_SECRET:?Set AGENT_SERVER_SECRET in .env}
+      AGENT_SERVER_HOST: 0.0.0.0
+      AGENT_SERVER_PORT: "8000"
+      AGENT_SERVER_WORKERS: "1"
+      AGENT_SERVER_PUBLIC_ORIGIN: ${AGENT_SERVER_PUBLIC_ORIGIN:?Set the browser-facing server URL in .env}
+      AGENT_SERVER_CORS_ORIGINS: ${AGENT_SERVER_PUBLIC_ORIGIN:?Set the browser-facing server URL in .env}
+    volumes:
+      - agents-anywhere-files-next:/data
+    ports:
+      - "${AGENTS_ANYWHERE_WEB_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", /opt/venv/bin/python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v2/health/ready', timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [backend, frontend]
+
+networks:
+  backend:
+    internal: true
+  frontend:
+
+volumes:
+  agents-anywhere-pg-next:
+  agents-anywhere-redis-next:
+  agents-anywhere-files-next:

@@ -15,7 +15,7 @@
 
 ## 首次配置
 
-1. 在 Docker Hub 创建公开仓库 `你的用户名/agents-anywhere`。
+1. 本仓库发布到 Docker Hub 公开仓库 `yxyu258/agents-anywhere`。如需自行维护，请创建自己的公开仓库。
 2. 在 Docker Hub 创建有该仓库写权限的 Access Token。
 3. 在本仓库 Settings → Secrets and variables → Actions 中设置：
    - Repository variable `DOCKERHUB_USERNAME`：Docker Hub 用户名（或组织 namespace）。
@@ -26,10 +26,12 @@
 
 ## NAS 使用
 
+全新安装可下载本仓库的 `compose.yaml` 和 `.env.example`，把 `.env.example` 复制为 `.env`，为两个密钥分别运行 `openssl rand -hex 32` 并填写结果，将 `AGENT_SERVER_PUBLIC_ORIGIN` 改为实际访问地址，然后执行 `docker compose up -d`。首次初始化令牌可在主服务日志中查看。此配置使用独立数据卷，已有部署应继续使用原有数据目录、数据库密码和服务密钥。
+
 在原有 Compose 的 `server-next` 和 `migrate-next` 两个服务中，移除 `build`，都改用相同镜像：
 
 ```yaml
-image: 你的用户名/agents-anywhere:2.1.0
+image: yxyu258/agents-anywhere:2.1.0
 ```
 
 替换上面的用户名和版本为实际发布值。数据库、Redis、环境变量、卷和网络保持原有设置。Agent 在接入的工作设备上运行；此镜像只托管服务端。
