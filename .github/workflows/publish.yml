@@ -1,0 +1,150 @@
+name: Build and publish Agents Anywhere
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional official stable tag, e.g. v2.1.0; blank = latest stable'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dockerhub-publish
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      build: ${{ steps.release.outputs.build }}
+      promote: ${{ steps.release.outputs.promote }}
+      latest: ${{ steps.release.outputs.latest }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+      image: ${{ steps.release.outputs.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Resolve latest stable release and inspect published tags
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+        run: python3 scripts/resolve-release.py
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      IMAGE: ${{ needs.detect.outputs.image }}
+      CANDIDATE: ${{ needs.detect.outputs.image }}:ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: anywhere-labs/Agents-Anywhere
+          ref: ${{ needs.detect.outputs.sha }}
+          path: upstream
+          persist-credentials: false
+      - name: Preserve upstream license and notices
+        run: python3 scripts/prepare-build.py
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build native server image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: ./upstream
+          file: ./upstream/docker/Dockerfile.publish
+          target: server
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          push: false
+          tags: ${{ env.CANDIDATE }}
+          provenance: false
+          labels: |
+            org.opencontainers.image.title=Agents Anywhere (unofficial build)
+            org.opencontainers.image.description=Unofficial image built from the upstream stable release; no application code changes.
+            org.opencontainers.image.source=https://github.com/anywhere-labs/Agents-Anywhere
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.detect.outputs.sha }}
+            org.opencontainers.image.version=${{ needs.detect.outputs.version }}
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=server-${{ matrix.arch }}
+      - name: Test migration, API readiness, and Web root
+        run: bash scripts/smoke-test.sh "$CANDIDATE"
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Push tested architecture candidate
+        run: docker push "$CANDIDATE"
+
+  publish:
+    needs: [detect, build]
+    if: >-
+      always() && needs.detect.result == 'success' &&
+      ((needs.detect.outputs.build == 'true' && needs.build.result == 'success') ||
+       needs.detect.outputs.promote == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IMAGE: ${{ needs.detect.outputs.image }}
+      VERSION: ${{ needs.detect.outputs.version }}
+      UPSTREAM_TAG: ${{ needs.detect.outputs.tag }}
+      CANDIDATE_PREFIX: ${{ needs.detect.outputs.image }}:ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish version manifest after both architectures pass
+        if: needs.detect.outputs.build == 'true'
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" \
+            "$CANDIDATE_PREFIX-amd64" "$CANDIDATE_PREFIX-arm64"
+      - name: Verify both architectures are in the version index
+        run: |
+          docker buildx imagetools inspect "$IMAGE:$VERSION" --raw > manifest.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open('manifest.json'))
+          platforms = {(m['platform']['os'], m['platform']['architecture']) for m in data.get('manifests', [])}
+          assert {('linux', 'amd64'), ('linux', 'arm64')} <= platforms, platforms
+          print('PASS: amd64 and arm64 manifest verified')
+          PY
+      - name: Update latest only if this is still the newest upstream stable release
+        if: needs.detect.outputs.latest == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current="$(gh api repos/anywhere-labs/Agents-Anywhere/releases/latest --jq .tag_name)"
+          if [[ "$current" == "$UPSTREAM_TAG" ]]; then
+            docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION"
+          else
+            echo "A newer upstream release exists; keeping latest unchanged in this run."
+          fi
+      - name: Show published image
+        run: |
+          echo "## Published image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$IMAGE:$VERSION\` — linux/amd64 and linux/arm64" >> "$GITHUB_STEP_SUMMARY"
