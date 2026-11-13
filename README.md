@@ -1,6 +1,6 @@
 # Agents Anywhere Docker 镜像（非官方）
 
-从 [anywhere-labs/Agents-Anywhere](https://github.com/anywhere-labs/Agents-Anywhere) 正式版源码构建服务端镜像，包含官方 Web 前端。本仓库不修改应用代码；仅添加镜像元信息，并把上游 LICENSE / NOTICE 复制到镜像的 `/usr/share/licenses/agents-anywhere/`。
+从 [anywhere-labs/Agents-Anywhere](https://github.com/anywhere-labs/Agents-Anywhere) 正式版源码构建服务端镜像，包含官方 Web 前端。本仓库不修改应用代码；仅添加镜像元信息，并把该版本的许可声明复制到镜像的 `/usr/share/licenses/agents-anywhere/`。
 
 ## 自动发布
 
@@ -48,4 +48,4 @@ NAS 拉取镜像无需构建。本仓库自动发布不等于 NAS 自动升级�
 
 ## 许可
 
-Agents Anywhere 使用 Apache-2.0；上游历史 MIT 声明保留在 NOTICE 中。此处保留上游 LICENSE、NOTICE，并在每次构建时嵌入对应版本的声明。镜像是社区构建，与上游官方无隶属关系。第三方依赖保留其原有许可。
+上游 `v2.1.0` 的 README 声明 MIT，完整许可位于该版本的 `dsh-bridge/LICENSE`；打包时将其复制为镜像中的 LICENSE。后续上游已改用 Apache-2.0，并新增根目录 LICENSE、NOTICE；构建时保留所选正式版自身的许可文件，不把新许可证套用于旧版本。镜像标签记录相应的 SPDX 标识。本发布仓库的脚本使用 Apache-2.0，保留上游当前 LICENSE、NOTICE 供参考。镜像是社区构建，与上游官方无隶属关系。第三方依赖保留其原有许可。
